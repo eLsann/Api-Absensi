@@ -291,7 +291,7 @@ jobs:
               STATUS=$(_health)
               case "$STATUS" in
                 healthy)
-                  curl -sf http://localhost:8000/health > /dev/null && HEALTHY=1 && break
+                  curl -sf http://localhost:8001/health > /dev/null && HEALTHY=1 && break
                   echo "⚠️  Docker healthy tapi /health belum respond (${ELAPSED}s)";;
                 starting)
                   echo "⏱️  Starting... ${ELAPSED}/${MAX_WAIT}s";;
@@ -318,5 +318,5 @@ jobs:
             echo " ✅ DEPLOY BERHASIL!"
             echo "    Image : $IMAGE_FULL:$IMAGE_TAG"
             echo "    RAM   : ${FREE_AFTER}MB tersisa"
-            echo "    API   : http://localhost:8000/health"
+            echo "    API   : http://localhost:8001/health"
             echo "════════════════════════════════════════"

@@ -59,8 +59,8 @@ docker-compose up -d --build
 ```
 
 Layanan akan tersedia di:
-*   **API Root**: `http://localhost:8000`
-*   **API Documentation (Swagger)**: `http://localhost:8000/docs`
+*   **API Root**: `http://localhost:8001`
+*   **API Documentation (Swagger)**: `http://localhost:8001/docs`
 *   **Database Admin**: `http://localhost:8080` (User: `root`, Pass: `root`)
 
 ## Pengembangan Lokal (Manual)

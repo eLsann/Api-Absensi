@@ -133,14 +133,14 @@ ufw --force reset
 # SSH (jangan sampai terkunci!)
 ufw allow 22/tcp comment 'SSH'
 # API port
-ufw allow 8000/tcp comment 'Absensi API'
+ufw allow 8001/tcp comment 'Absensi API'
 # Tailscale (UDP)
 ufw allow 41641/udp comment 'Tailscale'
 # Block semua yang lain
 ufw default deny incoming
 ufw default allow outgoing
 ufw --force enable
-echo "✅ Firewall dikonfigurasi (port 22, 8000, 41641)"
+echo "✅ Firewall dikonfigurasi (port 22, 8001, 41641)"
 ufw status verbose
 
 # ─── 8. Konfigurasi sistem untuk 2GB RAM ──────────────────────

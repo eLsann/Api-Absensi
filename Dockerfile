@@ -60,7 +60,7 @@ ENV PATH=/root/.local/bin:$PATH
 COPY . .
 
 # Expose port
-EXPOSE 8000
+EXPOSE 8001
 
 # ─── Docker Health Check ────────────────────────────────────
 # start_period: 60s karena PyTorch model load butuh ~30-60 detik
@@ -68,7 +68,7 @@ EXPOSE 8000
 # timeout: 10s — batas waktu per cek
 # retries: 3 — berapa kali gagal sebelum mark unhealthy
 HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
-    CMD curl -f http://localhost:8000/health || exit 1
+    CMD curl -f http://localhost:8001/health || exit 1
 
 # ─── Command ─────────────────────────────────────────────────
 # PENTING UNTUK 2GB RAM:
@@ -79,7 +79,7 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
 # Gunakan env var WORKERS untuk override (default 1)
 CMD ["sh", "-c", "python -m uvicorn app.main:app \
     --host 0.0.0.0 \
-    --port 8000 \
+    --port 8001 \
     --workers ${WORKERS:-1} \
     --backlog 64 \
     --timeout-keep-alive 30 \

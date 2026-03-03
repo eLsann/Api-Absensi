@@ -23,7 +23,7 @@ Dokumen ini adalah satu-satunya panduan yang Anda butuhkan untuk menjalankan API
     ```
 
 3.  **SELESAI!** 
-    -   API Anda sekarang aktif di: `http://localhost:8000`
+    -   API Anda sekarang aktif di: `http://localhost:8001`
     -   Dashboard Database: `http://localhost:8080` (Login: `root` / `root`)
 
 ---
@@ -61,7 +61,7 @@ Namun, untuk keamanan (setelah deploy), silakan ubah `SECRET_KEY` dan password d
 Agar Aplikasi Desktop bisa absen ke server ini:
 1.  Cari tahu IP Address server ini (misal: `192.168.1.50`).
 2.  Di Aplikasi Desktop, ubah settingan `API_URL` menjadi:
-    `http://192.168.1.50:8000`
+    `http://192.168.1.50:8001`
 
 ---
 

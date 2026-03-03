@@ -203,9 +203,29 @@ jobs:
 
           echo "✅ Config files synced to server"
 
+      # ── PULL IMAGE ke server (step terpisah — timeout 30m untuk koneksi lambat) ──
+      # Dipisah dari deploy agar timeout tidak mempengaruhi health check & rollback
+      - name: Pull image on server
+        uses: appleboy/ssh-action@v1.0.0
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          port: ${{ secrets.SSH_PORT || 22 }}
+          command_timeout: 30m
+          script: |
+            DEPLOY_PATH="${{ env.DEPLOY_PATH }}"
+            IMAGE_FULL="${{ env.REGISTRY }}/${{ needs.build.outputs.image-name }}"
+            IMAGE_TAG="${{ needs.build.outputs.image-tag }}"
+            cd "$DEPLOY_PATH"
+            GHCR_PAT="${{ secrets.GHCR_PAT }}"
+            [ -n "$GHCR_PAT" ] && echo "$GHCR_PAT" | \
+              docker login ${{ env.REGISTRY }} -u "${{ github.actor }}" --password-stdin || true
+            echo "📥 Pulling $IMAGE_FULL:$IMAGE_TAG..."
+            docker compose pull api
+            echo "✅ Pull selesai"
+
       # ── SINGLE SSH SESSION: preflight + deploy + health check + cleanup ──
-      # Sebelumnya: 2 koneksi SSH terpisah (+30-60s overhead).
-      # Sekarang   : 1 koneksi, semua logika di script yang sama.
       - name: Preflight → Deploy → Verify
         uses: appleboy/ssh-action@v1.0.0
         with:
@@ -213,7 +233,7 @@ jobs:
           username: ${{ secrets.SSH_USER }}
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           port: ${{ secrets.SSH_PORT || 22 }}
-          command_timeout: 18m
+          command_timeout: 10m
           script: |
             set -euo pipefail
             DEPLOY_PATH="${{ env.DEPLOY_PATH }}"
@@ -268,11 +288,7 @@ jobs:
               && sed -i "s|^IMAGE_TAG=.*|IMAGE_TAG=$IMAGE_TAG|" .env \
               || echo "IMAGE_TAG=$IMAGE_TAG" >> .env
 
-            # ── PULL IMAGE BARU ───────────────────────────────────────────
-            echo "📥 Pulling $IMAGE_FULL:$IMAGE_TAG..."
-            docker compose pull api
-
-            # ── ZERO-DOWNTIME RESTART ─────────────────────────────────────
+            # ── ZERO-DOWNTIME RESTART (image sudah di-pull di step sebelumnya) ─
             # Hapus zombie container jika ada, lalu up
             docker ps -a --filter "name=absensi-api" -q | xargs -r docker rm -f 2>/dev/null || true
             docker compose up -d --no-deps api

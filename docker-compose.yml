@@ -31,6 +31,11 @@ services:
       - DATABASE_URL=mysql+pymysql://${DB_USER:-absensi_user}:${DB_PASSWORD}@db:3306/${DB_NAME:-absensi}
       - TZ=${TZ:-Asia/Jakarta}
       - WORKERS=${WORKERS:-1}
+      # ─── RAM Optimization (PyTorch) ───────────
+      # Membatasi thread PyTorch agar tidak menghabiskan RAM untuk idle threads
+      - OMP_NUM_THREADS=1
+      - MKL_NUM_THREADS=1
+      - OPENBLAS_NUM_THREADS=1
     depends_on:
       db:
         condition: service_healthy

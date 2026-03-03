@@ -9,6 +9,7 @@ sqlalchemy>=2.0.0
 pymysql>=1.1.0
 
 # ─── ML / Face Recognition ────────────────────────────────────
+--extra-index-url https://download.pytorch.org/whl/cpu
 torch>=2.0.0
 facenet-pytorch>=2.5.3
 opencv-python-headless>=4.8.0

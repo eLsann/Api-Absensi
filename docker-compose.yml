@@ -90,26 +90,6 @@ services:
           cpus: "0.5"
         reservations:
           memory: 128M
-  # ─── phpMyAdmin (OPSIONAL — nonaktifkan di production kalau RAM mepet) ──
-  # Uncomment hanya saat butuh manajemen database via browser
-  # Konsumsi RAM: ~80-120MB
-  #
-  # phpmyadmin:
-  #   image: phpmyadmin/phpmyadmin:latest
-  #   container_name: absensi-pma
-  #   restart: "no"  # Jangan auto-start, jalankan manual saja
-  #   environment:
-  #     PMA_HOST: db
-  #     UPLOAD_LIMIT: 64M
-  #   ports:
-  #     - "127.0.0.1:8080:80"  # Bind ke localhost saja (akses via SSH tunnel)
-  #   depends_on:
-  #     - db
-  #   deploy:
-  #     resources:
-  #       limits:
-  #         memory: 128M
-
   # ─── Networks ─────────────────────────────────────────────────
 networks:
   default:

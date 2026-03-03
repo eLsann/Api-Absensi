@@ -1,0 +1,289 @@
+name: CI/CD Pipeline - API Absensi Production
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  # Trigger manual dari GitHub Actions tab
+  workflow_dispatch:
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository_owner }}/${{ github.event.repository.name }}
+  DEPLOY_PATH: ${{ secrets.DEPLOY_PATH != '' && secrets.DEPLOY_PATH || '/opt/facercg' }}
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # =====================================================================
+  # JOB 1: TEST — pytest + ruff, SQLite only (tidak butuh ML/MySQL di CI)
+  # =====================================================================
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+          # Cache key berdasarkan hash requirements.txt
+          # → pip install di-skip sepenuhnya jika requirements tidak berubah
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      # Install semua deps kecuali torch GPU (pakai CPU-only ~200MB vs ~2GB)
+      # Dibagi 2 step agar layer cache pip lebih granular:
+      #   - Step A: deps ringan (cache key: requirements.txt)
+      #   - Step B: torch CPU (cache key: torch version)
+      - name: Install app dependencies (no torch)
+        run: |
+          pip install -q \
+            "fastapi>=0.100.0" "uvicorn[standard]>=0.20.0" \
+            "python-multipart>=0.0.6" "sqlalchemy>=2.0.0" \
+            "python-dotenv>=1.0.0" "opencv-python-headless>=4.8.0" \
+            "numpy>=1.24.0" "pillow>=10.0.0" \
+            "python-jose[cryptography]>=3.3.0" "bcrypt>=4.0.1" \
+            "tzdata>=2023.3" "pytest>=7.0.0" "httpx>=0.24.0" \
+            "pymysql>=1.1.0" "typing_extensions>=4.12.0" ruff
+
+      - name: Install PyTorch CPU-only
+        run: pip install -q torch --index-url https://download.pytorch.org/whl/cpu && pip install -q "facenet-pytorch>=2.5.3"
+
+      - name: Lint (ruff)
+        run: ruff check app/ --output-format=github
+
+      - name: Run tests
+        env:
+          DATABASE_URL: sqlite:///./test_absensi.db
+          SECRET_KEY: ci-test-secret-key-32chars-minimum
+          DEVICE_TOKENS: test_device:test_token
+          DEFAULT_ADMIN_USER: admin
+          DEFAULT_ADMIN_PASSWORD: testpass123
+        run: pytest tests/ -v --tb=short
+
+  # =====================================================================
+  # JOB 2: BUILD & PUSH ke GHCR — hanya saat push ke main
+  # =====================================================================
+  build:
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    needs: test
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      image-tag: ${{ steps.meta.outputs.version }}
+      image-name: ${{ steps.prep.outputs.image }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Lowercase + set immutable tag — digabung jadi 1 step
+      - name: Prepare image name & tag
+        id: prep
+        run: |
+          IMAGE=$(echo "${{ env.IMAGE_NAME }}" | tr '[:upper:]' '[:lower:]')
+          echo "image=$IMAGE" >> $GITHUB_OUTPUT
+          echo "full=${{ env.REGISTRY }}/$IMAGE" >> $GITHUB_OUTPUT
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ steps.prep.outputs.full }}
+          tags: |
+            type=sha,prefix=main-
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            GIT_SHA=${{ github.sha }}
+          # GHA cache kritis untuk PyTorch layer ~2GB
+          # Tanpa cache: ~20 menit | Dengan cache: ~2-5 menit
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  # =====================================================================
+  # JOB 3: DEPLOY ke Debian VM via Tailscale + SSH (1 session, 1 koneksi)
+  # =====================================================================
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    timeout-minutes: 20
+    concurrency:
+      group: production-deploy
+      cancel-in-progress: false
+    environment:
+      name: production
+
+    steps:
+      - name: Connect to Tailscale
+        uses: tailscale/github-action@v2
+        with:
+          authkey: ${{ secrets.TAILSCALE_AUTHKEY }}
+
+      - name: Add SSH known host
+        env:
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+        run: |
+          [ -z "$SSH_HOST" ] && { echo "❌ SSH_HOST kosong!"; exit 1; }
+          mkdir -p ~/.ssh
+          ssh-keyscan -H "$SSH_HOST" >> ~/.ssh/known_hosts || {
+            echo "❌ ssh-keyscan gagal! Cek SSH_HOST (Tailscale IP) dan port 22."
+            exit 1
+          }
+
+      # ── SINGLE SSH SESSION: preflight + deploy + health check + cleanup ──
+      # Sebelumnya: 2 koneksi SSH terpisah (+30-60s overhead).
+      # Sekarang   : 1 koneksi, semua logika di script yang sama.
+      - name: Preflight → Deploy → Verify
+        uses: appleboy/ssh-action@v1.0.0
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          port: ${{ secrets.SSH_PORT || 22 }}
+          command_timeout: 18m
+          script: |
+            set -euo pipefail
+            DEPLOY_PATH="${{ env.DEPLOY_PATH }}"
+            IMAGE_TAG="${{ needs.build.outputs.image-tag }}"
+            IMAGE_FULL="${{ env.REGISTRY }}/${{ needs.build.outputs.image-name }}"
+
+            # ── PREFLIGHT ────────────────────────────────────────────────
+            echo "── Preflight ───────────────────────────────────────────"
+
+            [ -d "$DEPLOY_PATH" ] || { echo "❌ $DEPLOY_PATH tidak ada. Jalankan server_setup.sh!"; exit 1; }
+            cd "$DEPLOY_PATH"
+
+            [ -f .env ] || { echo "❌ .env tidak ada. Copy dari .env.production.example!"; exit 1; }
+
+            for var in SECRET_KEY DATABASE_URL DEVICE_TOKENS; do
+              grep -q "^${var}=." .env || { echo "❌ Env var kosong/hilang: $var"; exit 1; }
+            done
+
+            docker info > /dev/null 2>&1 || { echo "❌ Docker daemon tidak berjalan!"; exit 1; }
+
+            # RAM check — auto-stop phpMyAdmin jika RAM tersedia < 500MB
+            FREE_MB=$(awk '/MemAvailable/{printf "%d", $2/1024}' /proc/meminfo)
+            echo "🧠 RAM tersedia: ${FREE_MB}MB"
+            if [ "$FREE_MB" -lt 500 ]; then
+              echo "⚠️  RAM < 500MB, stop phpMyAdmin untuk bebaskan RAM..."
+              docker compose stop phpmyadmin 2>/dev/null || true
+            fi
+
+            # Disk check (warning only, tidak block deploy)
+            DISK_MB=$(df "$DEPLOY_PATH" | awk 'NR==2{printf "%d", $4/1024}')
+            [ "$DISK_MB" -lt 3000 ] && echo "⚠️  Disk tersisa ${DISK_MB}MB (< 3GB, monitor!)" \
+                                     || echo "💾 Disk tersisa: ${DISK_MB}MB"
+
+            echo "✅ Preflight OK"
+
+            # ── GHCR LOGIN ───────────────────────────────────────────────
+            GHCR_PAT="${{ secrets.GHCR_PAT }}"
+            [ -n "$GHCR_PAT" ] && echo "$GHCR_PAT" | \
+              docker login ${{ env.REGISTRY }} -u "${{ github.actor }}" --password-stdin || true
+
+            # ── CAPTURE CURRENT TAG (untuk rollback) ─────────────────────
+            CURRENT_IMAGE=$(docker inspect absensi-api --format='{{.Config.Image}}' 2>/dev/null || echo "none")
+            echo "📌 Current : $CURRENT_IMAGE"
+            echo "📦 New     : $IMAGE_FULL:$IMAGE_TAG"
+
+            # ── UPDATE IMAGE TAG di .env ──────────────────────────────────
+            grep -q "^IMAGE_TAG=" .env \
+              && sed -i "s|^IMAGE_TAG=.*|IMAGE_TAG=$IMAGE_TAG|" .env \
+              || echo "IMAGE_TAG=$IMAGE_TAG" >> .env
+
+            # ── PULL IMAGE BARU ───────────────────────────────────────────
+            echo "📥 Pulling $IMAGE_FULL:$IMAGE_TAG..."
+            docker compose pull api
+
+            # ── ZERO-DOWNTIME RESTART ─────────────────────────────────────
+            # Hapus zombie container jika ada, lalu up
+            docker ps -a --filter "name=absensi-api" -q | xargs -r docker rm -f 2>/dev/null || true
+            docker compose up -d --no-deps api
+            echo "🔄 Container di-restart"
+
+            # ── HEALTH CHECK ──────────────────────────────────────────────
+            # TIDAK pakai sleep hardcoded — Docker sudah track start_period
+            # Loop langsung baca status dari Docker healthcheck:
+            #   starting  → PyTorch masih load model
+            #   healthy   → ✅ sukses
+            #   unhealthy → ❌ rollback
+            echo "⏳ Menunggu healthcheck (start_period=60s, max=150s)..."
+
+            MAX_WAIT=150; ELAPSED=0; INTERVAL=5
+            HEALTHY=0
+
+            _health() {
+              docker inspect absensi-api \
+                --format='{{if .State.Health}}{{.State.Health.Status}}{{else}}no-healthcheck{{end}}' \
+                2>/dev/null || echo "not-running"
+            }
+
+            _rollback() {
+              echo "🔄 Rolling back ke: $CURRENT_IMAGE"
+              if [ "$CURRENT_IMAGE" != "none" ]; then
+                OLD_TAG="${CURRENT_IMAGE##*:}"
+                sed -i "s|^IMAGE_TAG=.*|IMAGE_TAG=$OLD_TAG|" .env
+                docker compose up -d --no-deps api
+                sleep 15
+                [ "$(_health)" = "healthy" ] \
+                  && echo "✅ Rollback berhasil" \
+                  || echo "❌ Rollback GAGAL — intervensi manual diperlukan!"
+              fi
+              docker compose logs --tail=80 api
+              exit 1
+            }
+
+            while [ $ELAPSED -lt $MAX_WAIT ]; do
+              STATUS=$(_health)
+              case "$STATUS" in
+                healthy)
+                  curl -sf http://localhost:8000/health > /dev/null && HEALTHY=1 && break
+                  echo "⚠️  Docker healthy tapi /health belum respond (${ELAPSED}s)";;
+                starting)
+                  echo "⏱️  Starting... ${ELAPSED}/${MAX_WAIT}s";;
+                unhealthy|not-running)
+                  echo "❌ Status: $STATUS setelah ${ELAPSED}s"; _rollback;;
+              esac
+              sleep $INTERVAL; ELAPSED=$((ELAPSED + INTERVAL))
+            done
+
+            [ $HEALTHY -eq 0 ] && { echo "❌ Timeout ${MAX_WAIT}s"; _rollback; }
+
+            # ── CLEANUP OLD IMAGES (jalankan di background, tidak blocking) ─
+            {
+              docker images "$IMAGE_FULL" --format "{{.Tag}}" | grep "^main-" | \
+                sort -r | tail -n +6 | \
+                xargs -r -I {} docker rmi "$IMAGE_FULL:{}" 2>/dev/null || true
+              docker image prune -f > /dev/null 2>&1 || true
+            } &
+
+            # ── SUMMARY ───────────────────────────────────────────────────
+            FREE_AFTER=$(awk '/MemAvailable/{printf "%d", $2/1024}' /proc/meminfo)
+            echo ""
+            echo "════════════════════════════════════════"
+            echo " ✅ DEPLOY BERHASIL!"
+            echo "    Image : $IMAGE_FULL:$IMAGE_TAG"
+            echo "    RAM   : ${FREE_AFTER}MB tersisa"
+            echo "    API   : http://localhost:8000/health"
+            echo "════════════════════════════════════════"

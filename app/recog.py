@@ -1,13 +1,13 @@
-import numpy as np
 import cv2
-import torch
+from facenet_pytorch import MTCNN, InceptionResnetV1
+import numpy as np
 from PIL import Image
 from sqlalchemy.orm import Session
-from facenet_pytorch import InceptionResnetV1, MTCNN
+import torch
 
 from app.config import settings
-from app.models import Person
 from app.logging_config import get_logger
+from app.models import Person
 
 logger = get_logger(__name__)
 
@@ -16,6 +16,12 @@ _MODEL = InceptionResnetV1(pretrained="vggface2").eval().to(_DEVICE)
 logger.info(f"Face recognition model loaded on device: {_DEVICE}")
 
 # MTCNN detector with landmark detection for alignment
+# MTCNN detection thresholds: [P-Net, R-Net, O-Net]
+# Ekstrak ke konstanta agar konsisten (tidak duplikat di defensive reset L117)
+_MTCNN_THRESHOLDS = [0.6, 0.7, 0.8]
+# Minimum face detection confidence (filter post-MTCNN)
+_MIN_DETECTION_PROB = 0.9
+
 _MTCNN = MTCNN(
     image_size=160,
     margin=20,
@@ -23,7 +29,7 @@ _MTCNN = MTCNN(
     device=_DEVICE,
     post_process=False,
     min_face_size=80,
-    thresholds=(0.6, 0.7, 0.8)  # 3 thresholds for P-Net, R-Net, O-Net stages
+    thresholds=_MTCNN_THRESHOLDS,
 )
 logger.info("MTCNN face detector initialized")
 
@@ -37,22 +43,22 @@ def _align_face(img_rgb: np.ndarray, landmarks: np.ndarray) -> np.ndarray:
         # Extract eye positions (MTCNN returns 5 landmarks: left_eye, right_eye, nose, left_mouth, right_mouth)
         left_eye = landmarks[0]   # (x, y)
         right_eye = landmarks[1]  # (x, y)
-        
+
         # Calculate angle between eyes
         dy = right_eye[1] - left_eye[1]
         dx = right_eye[0] - left_eye[0]
         angle = np.degrees(np.arctan2(dy, dx))
-        
+
         # Get center point between eyes
         eye_center = ((left_eye[0] + right_eye[0]) / 2, (left_eye[1] + right_eye[1]) / 2)
-        
+
         # Get rotation matrix
         h, w = img_rgb.shape[:2]
         M = cv2.getRotationMatrix2D(eye_center, angle, 1.0)
-        
+
         # Apply affine transformation
         aligned = cv2.warpAffine(img_rgb, M, (w, h), flags=cv2.INTER_CUBIC)
-        
+
         return aligned
     except Exception as e:
         logger.warning(f"Alignment failed, using original: {e}")
@@ -102,7 +108,7 @@ def embed_face(face_bgr: np.ndarray) -> np.ndarray:
 def _detect_faces_internal(bgr: np.ndarray, max_faces: int = 5, sort_left_to_right: bool = False, include_queue_id: bool = False) -> list:
     """
     Internal helper for face detection. Used by both detect_faces and detect_faces_from_bgr.
-    
+
     Args:
         bgr: BGR image array
         max_faces: Maximum number of faces to detect
@@ -110,48 +116,49 @@ def _detect_faces_internal(bgr: np.ndarray, max_faces: int = 5, sort_left_to_rig
         include_queue_id: Include queue_id in results
     """
     rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
-    
+
     # Defensive Fix: Validate thresholds to prevent IndexError
     if isinstance(_MTCNN.thresholds, list) and len(_MTCNN.thresholds) < 3:
         logger.warning(f"MTCNN thresholds corrupted (len={len(_MTCNN.thresholds)}). Resetting to defaults.")
-        _MTCNN.thresholds = [0.6, 0.7, 0.8]
-    
+        _MTCNN.thresholds = list(_MTCNN_THRESHOLDS)  # pakai konstanta, bukan literal duplikat
+
     # Use MTCNN to detect faces and landmarks
     boxes, probs, landmarks = _MTCNN.detect(rgb, landmarks=True)
-    
+
     if boxes is None or len(boxes) == 0:
         return []
-    
+
     valid_faces = []
-    
+
     # Filter by probability and collect valid faces
-    for i, (box, prob, lm) in enumerate(zip(boxes, probs, landmarks)):
-        if prob < 0.9:  # Skip low confidence detections
+    # _ menggantikan i karena index tidak dipakai di dalam loop (B007)
+    for _, (box, prob, lm) in enumerate(zip(boxes, probs, landmarks, strict=False)):
+        if prob < settings.detection_confidence:  # dikonfigurasi via DETECTION_CONFIDENCE env var
             continue
         valid_faces.append((box, prob, lm))
-    
+
     if not valid_faces:
         return []
-    
+
     # Sort by x position (left to right) if requested
     if sort_left_to_right:
         valid_faces = sorted(valid_faces, key=lambda f: f[0][0])
-    
+
     # Limit to max_faces
     valid_faces = valid_faces[:max_faces]
-    
+
     results = []
     h, w = bgr.shape[:2]
-    
+
     for i, (box, prob, lm) in enumerate(valid_faces):
         x1, y1, x2, y2 = [int(v) for v in box]
-        
+
         # Clamp to image bounds
         x1 = max(0, x1)
         y1 = max(0, y1)
         x2 = min(w, x2)
         y2 = min(h, y2)
-        
+
         # Add padding
         pad_w = int(0.15 * (x2 - x1))
         pad_h = int(0.15 * (y2 - y1))
@@ -159,25 +166,25 @@ def _detect_faces_internal(bgr: np.ndarray, max_faces: int = 5, sort_left_to_rig
         y1_pad = max(0, y1 - pad_h)
         x2_pad = min(w, x2 + pad_w)
         y2_pad = min(h, y2 + pad_h)
-        
+
         # Align face using landmarks before cropping
         aligned_rgb = _align_face(rgb, lm)
         aligned_bgr = cv2.cvtColor(aligned_rgb, cv2.COLOR_RGB2BGR)
-        
+
         # Crop from aligned image
         crop = aligned_bgr[y1_pad:y2_pad, x1_pad:x2_pad]
-        
+
         result = {
             "crop": crop,
             "confidence": float(prob),
             "bbox": [x1, y1, x2, y2]
         }
-        
+
         if include_queue_id:
             result["queue_id"] = i + 1
-        
+
         results.append(result)
-    
+
     return results
 
 
@@ -201,27 +208,27 @@ def identify_single(face_crop: np.ndarray, db: Session) -> dict:
     """Identify a single face crop against the cache"""
     if _CACHE["names"] is None:
         rebuild_cache(db)
-    
+
     names = _CACHE["names"] or []
     vectors = _CACHE["vectors"]
-    
+
     if vectors is None or vectors.shape[0] == 0:
         return {"status": "error", "name": None, "distance": None}
-    
+
     h, w = face_crop.shape[:2]
     if min(h, w) < settings.min_face_px:
         return {"status": "reject", "name": None, "distance": None}
-    
+
     try:
         emb = embed_face(face_crop)
         dists = np.linalg.norm(vectors - emb[None, :], axis=1)
         best_idx = int(np.argmin(dists))
         dist = float(dists[best_idx])
         name = names[best_idx]
-        
+
         if dist > settings.max_distance:
             return {"status": "unknown", "name": None, "distance": dist}
-        
+
         return {"status": "ok", "name": name, "distance": dist}
     except Exception as e:
         logger.error(f"identify_single error: {e}")
@@ -232,20 +239,20 @@ def identify_multiple(img_bytes: bytes, db: Session, max_faces: int = 5) -> dict
     """Detect and identify multiple faces in a single image"""
     try:
         faces_data = detect_faces(img_bytes, max_faces)
-        
+
         if not faces_data:
             return {
                 "status": "no_face",
                 "faces": [],
                 "recognized_names": []
             }
-        
+
         results = []
         recognized_names = []
-        
+
         for face in faces_data:
             result = identify_single(face["crop"], db)
-            
+
             face_result = {
                 "queue_id": face["queue_id"],
                 "bbox": face["bbox"],
@@ -254,18 +261,18 @@ def identify_multiple(img_bytes: bytes, db: Session, max_faces: int = 5) -> dict
                 "distance": result["distance"]
             }
             results.append(face_result)
-            
+
             if result["status"] == "ok" and result["name"]:
                 recognized_names.append(result["name"])
-        
+
         logger.info(f"Multi-face: {len(results)} detected, {len(recognized_names)} recognized")
-        
+
         return {
             "status": "ok",
             "faces": results,
             "recognized_names": recognized_names
         }
-        
+
     except Exception as e:
         logger.error(f"identify_multiple error: {e}", exc_info=True)
         return {

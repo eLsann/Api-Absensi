@@ -4,12 +4,14 @@ Attendance Logic with Time Rules
 - OUT: only allowed between out_start_time and out_end_time (from policy)
 - Only record successful events (status ok)
 """
-from datetime import datetime, time as dtime, timedelta, timezone
+from datetime import datetime, timedelta, timezone
+from datetime import time as dtime
 from zoneinfo import ZoneInfo
+
 from sqlalchemy.orm import Session
 
 from app.config import settings
-from app.models import DailyAttendance, AttendanceEvent
+from app.models import AttendanceEvent, DailyAttendance
 
 
 def _parse_time(time_str: str) -> dtime:
@@ -44,7 +46,7 @@ def decide_and_record(
     LATE_AFTER = _parse_time(late_after_time)
     OUT_START = _parse_time(out_start_time)
     OUT_END = _parse_time(out_end_time)
-    
+
     tz = ZoneInfo(policy_timezone)
     now_local = datetime.now(tz=tz)
     day_str = now_local.date().isoformat()
@@ -97,7 +99,7 @@ def decide_and_record(
         is_late = (current_time > LATE_AFTER)
         daily.in_time = now_utc_naive
         daily.in_is_late = is_late
-        
+
         if is_late:
             audio_text = f"Halo {person_name}, absensi masuk tercatat. Anda terlambat."
         else:

@@ -1,0 +1,70 @@
+# ==============================================================
+# pyproject.toml — Project Configuration
+# Tools: ruff (linter + formatter, pengganti flake8+black+isort)
+# ==============================================================
+
+[tool.ruff]
+# Target Python version
+target-version = "py310"
+line-length = 100
+
+# ==============================================================
+# LINTING (ruff check) — pengganti flake8
+# ==============================================================
+[tool.ruff.lint]
+select = [
+    "E",    # pycodestyle errors (indentation, whitespace, dsb.)
+    "W",    # pycodestyle warnings
+    "F",    # pyflakes (undefined names, unused imports, dsb.)
+    "I",    # isort (urutan imports)
+    "N",    # pep8-naming (konvensi penamaan)
+    "UP",   # pyupgrade (modernisasi syntax Python)
+    "B",    # flake8-bugbear (common bugs & design issues)
+    "SIM",  # flake8-simplify (simplifikasi kode)
+    "RUF",  # Ruff-specific rules
+]
+
+ignore = [
+    "E501",   # Line too long — ruff format yang handle ini
+    "B008",   # Do not perform function calls in default arguments (FastAPI Depends pola umum)
+    "N806",   # Variable in function should be lowercase — kita punya `M` (matrix) yang konvensional
+    "UP007",  # Use `X | Y` for union type — compat dengan Python 3.9
+    "SIM108", # Ternary operator — kadang if/else lebih readable
+]
+
+# File/dir yang di-skip
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = [
+    "S101",  # assert statements — wajar di test
+    "ANN",   # type annotations — opsional di test
+]
+
+# isort config (di dalam ruff)
+[tool.ruff.lint.isort]
+known-first-party = ["app"]
+force-sort-within-sections = true
+
+# ==============================================================
+# FORMATTING (ruff format) — pengganti black
+# ==============================================================
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+skip-magic-trailing-comma = false
+
+# ==============================================================
+# PYTEST
+# ==============================================================
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_functions = ["test_*"]
+addopts = "-v --tb=short"
+# Env vars untuk test (tidak butuh .env)
+env = [
+    "DATABASE_URL=sqlite:///./test_absensi.db",
+    "SECRET_KEY=ci-test-secret-key-32chars-minimum-x",
+    "DEVICE_TOKENS=test_device:test_token",
+    "DEFAULT_ADMIN_USER=admin",
+    "DEFAULT_ADMIN_PASSWORD=testpass123",
+]

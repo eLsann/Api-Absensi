@@ -1,7 +1,10 @@
-import time
 from dataclasses import dataclass
+import time
+
 from sqlalchemy.orm import Session
+
 from app.models import AttendancePolicy
+
 
 @dataclass
 class PolicyData:
@@ -37,7 +40,7 @@ def get_policy(db: Session) -> PolicyData:
         out_end_time=getattr(policy_row, 'out_end_time', '17:00'),  # Handle old DB without column
         retention_days=policy_row.retention_days,
     )
-    
+
     _CACHE["policy"] = policy_data
     _CACHE["built_at"] = now
     return policy_data

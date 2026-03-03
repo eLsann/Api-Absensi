@@ -1,62 +1,67 @@
-from dotenv import load_dotenv
+# load_dotenv() HARUS dipanggil sebelum import app modules
+# karena config.py membaca os.getenv() saat module di-load
 import os
+from pathlib import Path
+
+from dotenv import load_dotenv
+
 load_dotenv()
 
-from app.logging_config import setup_logging, get_logger
+# Setup logging sebelum import lain agar log dari import module tertangkap
+from app.logging_config import get_logger, setup_logging  # noqa: E402
+
 setup_logging(app_name="absensi_api", log_level="INFO")
 logger = get_logger(__name__)
 
-from fastapi import FastAPI, File, UploadFile, Header, HTTPException, Depends
-from fastapi.responses import JSONResponse
-from fastapi.middleware.cors import CORSMiddleware
-from sqlalchemy.orm import Session
+from fastapi import Depends, FastAPI, File, Header, HTTPException, UploadFile  # noqa: E402
+from fastapi.middleware.cors import CORSMiddleware  # noqa: E402
+from fastapi.responses import JSONResponse  # noqa: E402
+from fastapi.security import HTTPBearer  # noqa: E402
+from sqlalchemy.orm import Session  # noqa: E402
 
-from app.config import settings
-from app.database import Base, engine, get_db
-from app.policy import get_policy
-from app.recog import identify_multiple, rebuild_cache
-from app.attendance import decide_and_record
-from app.snapshots import save_snapshot_bytes
-
-from app.admin_people import router as admin_people_router
-from app.admin_logs import router as admin_logs_router
-from app.admin_corrections import router as admin_corrections_router
-from app.admin_reports import router as admin_reports_router
-from app.admin_auth import router as admin_auth_router, get_current_admin
-
+from app.admin_auth import get_current_admin  # noqa: E402
+from app.admin_auth import router as admin_auth_router  # noqa: E402
+from app.admin_corrections import router as admin_corrections_router  # noqa: E402
+from app.admin_logs import router as admin_logs_router  # noqa: E402
+from app.admin_people import router as admin_people_router  # noqa: E402
+from app.admin_reports import router as admin_reports_router  # noqa: E402
+from app.attendance import decide_and_record  # noqa: E402
+from app.config import settings  # noqa: E402
+from app.database import Base, engine, get_db  # noqa: E402
+from app.policy import get_policy  # noqa: E402
+from app.recog import identify_multiple, rebuild_cache  # noqa: E402
 
 Base.metadata.create_all(bind=engine)
 
-from fastapi.security import HTTPBearer
-from pathlib import Path
-
+# Versi dibaca dari env var, fallback ke string default
+APP_VERSION = os.getenv("APP_VERSION", "2.0.0")
 
 app = FastAPI(
-    title=settings.app_name, 
-    version="2.0.0",
+    title=settings.app_name,
+    version=APP_VERSION,
     swagger_ui_init_oauth={
-        "usePkceWithAuthorizationCodeGrant": True, 
-        "clientId": "fastapi-demo"
-    }
+        "usePkceWithAuthorizationCodeGrant": True,
+    },
 )
 
 @app.on_event("startup")
 async def startup_event():
     # Check DB Connection
     logger.info(f"Starting up in {settings.env} mode")
-    
+
     # Wait for Database Connection
     import time
+
     from sqlalchemy.exc import OperationalError
-    
-    max_retries = 30
-    retry_interval = 2
-    
+
+    max_retries = settings.db_max_retries
+    retry_interval = settings.db_retry_interval
+
     for i in range(max_retries):
         try:
             # Try to create a connection
-            with engine.connect() as conn:
-                pass
+            with engine.connect():
+                pass  # hanya test koneksi
             logger.info("Database connection established.")
             break
         except OperationalError as e:
@@ -71,7 +76,7 @@ async def startup_event():
         logger.info("Using MySQL Database")
     else:
         logger.info("Using SQLite Database")
-    
+
     # Ensure data dirs exist
     os.makedirs(settings.snapshot_dir, exist_ok=True)
     os.makedirs("./logs", exist_ok=True)
@@ -81,14 +86,14 @@ async def startup_event():
         from app.database import SessionLocal
         from app.models import AdminUser
         from app.security import hash_password
-        
+
         db = SessionLocal()
         existing_admin = db.query(AdminUser).first()
         if not existing_admin:
             logger.info("No admin found. Creating default admin account.")
             default_admin_user = settings.default_admin_user
             default_admin_pass = settings.default_admin_password
-            
+
             new_admin = AdminUser(
                 username=default_admin_user,
                 password_hash=hash_password(default_admin_pass),
@@ -104,8 +109,8 @@ async def startup_event():
 
 @app.get("/health")
 async def health_check():
-    """Health check endpoint for Railway/monitoring"""
-    return {"status": "healthy", "version": "2.0.0"}
+    """Health check endpoint for monitoring & Docker healthcheck probe."""
+    return {"status": "healthy", "version": APP_VERSION}
 
 security = HTTPBearer()
 
@@ -145,10 +150,7 @@ app.include_router(admin_reports_router)
 app.include_router(admin_auth_router)
 
 
-@app.get("/health")
-def health_check():
-    """Health check endpoint for monitoring"""
-    return {"status": "ok", "service": "Absensi API"}
+# /health sudah didefinisikan di atas (baris 107) — endpoint ini dihapus (F811 duplicate)
 
 
 @app.post("/v1/recognize_multi")
@@ -159,19 +161,18 @@ async def v1_recognize_multi(
     db: Session = Depends(get_db),
 ):
     """Recognize multiple faces (max 5) in a single image"""
-    from app.recog import identify_multiple
-    
+
     logger.info(f"Multi-face recognition request from device: {x_device_id}")
-    
+
     if not verify_device(x_device_id, x_device_token):
         logger.warning(f"Unauthorized device access attempt: {x_device_id}")
         raise HTTPException(status_code=401, detail="Unauthorized device")
 
     img_bytes = await file.read()
-    
+
     # Detect and identify all faces
     result = identify_multiple(img_bytes, db, max_faces=5)
-    
+
     if result["status"] == "no_face":
         return JSONResponse({
             "status": "no_face",
@@ -180,12 +181,12 @@ async def v1_recognize_multi(
             "recognized_names": [],
             "combined_audio": None
         })
-    
+
     # Process attendance for each recognized face
     policy = get_policy(db)
     processed_faces = []
     attendance_results = []
-    
+
     for face in result["faces"]:
         if face["status"] == "ok" and face["name"]:
             # Record attendance for this person
@@ -202,7 +203,7 @@ async def v1_recognize_multi(
                 out_end_time=policy.out_end_time,  # NEW: pass out_end_time from policy
                 snapshot_path=None,
             )
-            
+
             processed_faces.append({
                 "queue_id": face["queue_id"],
                 "bbox": face["bbox"],
@@ -211,7 +212,7 @@ async def v1_recognize_multi(
                 "event_type": out["event_type"],
                 "late": bool(out.get("is_late", False))
             })
-            
+
             if out["status"] == "ok":
                 attendance_results.append({
                     "name": face["name"],
@@ -227,14 +228,14 @@ async def v1_recognize_multi(
                 "event_type": None,
                 "late": False
             })
-    
+
     # Combined audio generation is handled by the Desktop Client now
     # We just return the structured data
-    
+
     recognized_names = [res["name"] for res in attendance_results]
-    
+
     logger.info(f"Multi-face: {len(processed_faces)} faces, {len(recognized_names)} recorded")
-    
+
     return JSONResponse({
         "status": "ok",
         "device_id": x_device_id,
@@ -248,10 +249,9 @@ async def v1_recognize_multi(
 
 @app.post("/admin/rebuild_cache")
 def admin_rebuild_cache(
-    db: Session = Depends(get_db), 
+    db: Session = Depends(get_db),
     _admin=Depends(get_current_admin)
 ):
-    from app.admin_auth import get_current_admin
     logger.info("Rebuilding face recognition cache via admin request")
     rebuild_cache(db)
     return {"ok": True}
@@ -265,11 +265,11 @@ def admin_cleanup(
     """Trigger cleanup of old data (snapshots & logs)"""
     import subprocess
     import sys
-    
+
     script_path = Path(__file__).parent.parent / "scripts" / "cleanup.py"
-    
+
     logger.info(f"Triggering cleanup for files older than {days} days")
-    
+
     # Run script as subprocess to ensure clean execution context
     try:
         result = subprocess.run(
@@ -293,19 +293,19 @@ def admin_reset_attendance(
 ):
     """Reset all attendance data (for demo purposes)"""
     from app.models import AttendanceEvent, DailyAttendance
-    
+
     logger.info("Resetting all attendance data (demo)")
-    
+
     # Delete all attendance events
     events_deleted = db.query(AttendanceEvent).delete()
-    
+
     # Delete all daily attendance records
     daily_deleted = db.query(DailyAttendance).delete()
-    
+
     db.commit()
-    
+
     logger.info(f"Reset complete: {events_deleted} events, {daily_deleted} daily records deleted")
-    
+
     return {
         "ok": True,
         "events_deleted": events_deleted,

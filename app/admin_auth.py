@@ -1,15 +1,13 @@
 from datetime import datetime, timedelta, timezone
-from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Header, status
+from fastapi import APIRouter, Depends, Header, HTTPException, status
+from jose import JWTError, jwt
 from sqlalchemy.orm import Session
-from jose import jwt, JWTError
 
-from app.database import get_db
 from app.config import settings
+from app.database import get_db
 from app.models import AdminUser
 from app.security import verify_password
-
 
 router = APIRouter(prefix="/admin", tags=["admin-auth"])
 
@@ -43,7 +41,7 @@ def admin_login(payload: dict, db: Session = Depends(get_db)):
 
 
 def get_current_admin(
-    authorization: Optional[str] = Header(None),
+    authorization: str | None = Header(None),
     db: Session = Depends(get_db),
 ):
     # Parse authorization header
@@ -71,8 +69,8 @@ def get_current_admin(
         username = payload.get("sub")
         if not username:
             raise HTTPException(status_code=401, detail="Invalid token")
-    except JWTError:
-        raise HTTPException(status_code=401, detail="Invalid token")
+    except JWTError as err:
+        raise HTTPException(status_code=401, detail="Invalid token") from err
 
     user = db.query(AdminUser).filter(AdminUser.username == username).one_or_none()
     if user is None:

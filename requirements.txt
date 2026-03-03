@@ -1,19 +1,27 @@
+# ─── Core API ────────────────────────────────────────────────
 fastapi>=0.100.0
 uvicorn[standard]>=0.20.0
 python-multipart>=0.0.6
-sqlalchemy>=2.0.0
 python-dotenv>=1.0.0
-requests>=2.31.0
-opencv-python-headless>=4.8.0
-numpy>=1.24.0
+
+# ─── Database ─────────────────────────────────────────────────
+sqlalchemy>=2.0.0
+pymysql>=1.1.0
+
+# ─── ML / Face Recognition ────────────────────────────────────
 torch>=2.0.0
 facenet-pytorch>=2.5.3
+opencv-python-headless>=4.8.0
+numpy>=1.24.0
 pillow>=10.0.0
+
+# ─── Security & Utils ─────────────────────────────────────────
 python-jose[cryptography]>=3.3.0
 bcrypt>=4.0.1
 tzdata>=2023.3
+typing_extensions>=4.12.0
+
+# ─── Dev / Testing (diinstall juga di production image, tapi tidak dipanggil) ──
 pytest>=7.0.0
 httpx>=0.24.0
-pymysql>=1.1.0  # Required for MySQL/MariaDB
-typing_extensions>=4.12.0  # Required for Pydantic v2
-# mysql-connector-python>=8.0.0  # Alternative driver
+pytest-env>=1.1.0

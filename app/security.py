@@ -1,7 +1,6 @@
+
 import bcrypt
-import os
-from datetime import datetime, timedelta, timezone
-from jose import jwt
+
 
 # Password hashing using native bcrypt
 def hash_password(password: str) -> str:

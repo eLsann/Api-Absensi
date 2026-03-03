@@ -1,12 +1,14 @@
+import csv
+from datetime import timedelta
+import io
+
 from fastapi import APIRouter, Depends, Query
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
-import io
-import csv
 
-from app.database import get_db
-from app.models import DailyAttendance, AttendanceEvent
 from app.admin_auth import get_current_admin
+from app.database import get_db
+from app.models import AttendanceEvent, DailyAttendance
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 
@@ -42,18 +44,18 @@ def export_csv(
     _admin=Depends(get_current_admin),
 ):
     """Export attendance data as CSV file"""
-    
+
     # Query daily attendance records
     query = db.query(DailyAttendance)
     if month:
         query = query.filter(DailyAttendance.day.startswith(month))
-    
+
     rows = query.order_by(DailyAttendance.day.desc(), DailyAttendance.person_name).all()
-    
+
     # Create CSV in memory
     output = io.StringIO()
     writer = csv.writer(output)
-    
+
     # Header
     writer.writerow([
         "Tanggal",
@@ -62,23 +64,21 @@ def export_csv(
         "Jam Pulang (WIB)",
         "Status Terlambat"
     ])
-    
+
     # Data rows
     for r in rows:
         # Convert UTC to WIB (UTC+7)
         in_time_str = ""
         out_time_str = ""
-        
+
         if r.in_time:
-            from datetime import timedelta
             in_wib = r.in_time + timedelta(hours=7)
             in_time_str = in_wib.strftime("%H:%M:%S")
-        
+
         if r.out_time:
-            from datetime import timedelta
             out_wib = r.out_time + timedelta(hours=7)
             out_time_str = out_wib.strftime("%H:%M:%S")
-        
+
         writer.writerow([
             r.day,
             r.person_name,
@@ -86,11 +86,11 @@ def export_csv(
             out_time_str,
             "Terlambat" if r.in_is_late else "Tepat Waktu"
         ])
-    
+
     # Prepare response
     output.seek(0)
     filename = f"absensi_{month or 'all'}.csv"
-    
+
     return StreamingResponse(
         iter([output.getvalue()]),
         media_type="text/csv",
@@ -105,16 +105,16 @@ def export_events_csv(
     _admin=Depends(get_current_admin),
 ):
     """Export all attendance events as CSV"""
-    
+
     query = db.query(AttendanceEvent).filter(AttendanceEvent.status == "ok")
     if day:
         query = query.filter(AttendanceEvent.day == day)
-    
+
     rows = query.order_by(AttendanceEvent.ts.desc()).all()
-    
+
     output = io.StringIO()
     writer = csv.writer(output)
-    
+
     # Header
     writer.writerow([
         "ID",
@@ -126,14 +126,13 @@ def export_events_csv(
         "Status",
         "Terlambat"
     ])
-    
+
     for r in rows:
         ts_str = ""
         if r.ts:
-            from datetime import timedelta
             ts_wib = r.ts + timedelta(hours=7)
             ts_str = ts_wib.strftime("%H:%M:%S")
-        
+
         writer.writerow([
             r.id,
             r.day,
@@ -144,10 +143,10 @@ def export_events_csv(
             r.status,
             "Ya" if r.is_late else "Tidak"
         ])
-    
+
     output.seek(0)
     filename = f"events_{day or 'all'}.csv"
-    
+
     return StreamingResponse(
         iter([output.getvalue()]),
         media_type="text/csv",

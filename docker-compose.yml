@@ -1,45 +1,112 @@
+# ==============================================================
+# docker-compose.yml — Production (Debian VM 2GB RAM)
+# ==============================================================
+# Image API diambil dari GHCR (diisi CI/CD, bukan build lokal)
+# Buat .env terlebih dahulu sebelum jalankan docker compose up
+# ==============================================================
+
 services:
+
+  # ─── API Service ──────────────────────────────────────────────
   api:
-    build:
-      context: .
-      dockerfile: Dockerfile
+    # ⚠️  WAJIB: Set GITHUB_REPOSITORY di .env sesuai repo kamu
+    # Format: owner/repo-name (semua huruf kecil)
+    # Contoh: rafly/api-absensi
+    # IMAGE_TAG diupdate otomatis oleh CI/CD pipeline (jangan ubah manual)
+    image: ghcr.io/${GITHUB_REPOSITORY}:${IMAGE_TAG:-latest}
     container_name: absensi-api
+    restart: unless-stopped
     ports:
       - "8000:8000"
     volumes:
+      # Data persistent: snapshots wajah
       - ./data:/app/data
+      # Log files
       - ./logs:/app/logs
-      - ./.env:/app/.env
-    restart: always
-    depends_on:
-      - db
+    env_file:
+      # Load semua env vars dari .env di direktori yang sama
+      - .env
     environment:
-      - ENV=${ENV:-production}
+      # Override DATABASE_URL untuk pakai service name 'db' (docker internal network)
+      - DATABASE_URL=mysql+pymysql://${DB_USER:-absensi_user}:${DB_PASSWORD}@db:3306/${DB_NAME:-absensi}
       - TZ=${TZ:-Asia/Jakarta}
-      # Database URL from env
-      - DATABASE_URL=mysql+pymysql://${DB_USER:-root}:${DB_PASSWORD:-root}@db:3306/${DB_NAME:-absensi}
+      - WORKERS=${WORKERS:-1}
+    depends_on:
+      db:
+        condition: service_healthy
+    # ─── Docker Health Check ──────────────────────────────────
+    healthcheck:
+      test: [ "CMD", "curl", "-f", "http://localhost:8000/health" ]
+      # start_period penting: PyTorch load model butuh ~30-60 detik
+      start_period: 60s
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    # ─── Resource Limits (KRITIS untuk 2GB RAM) ───────────────
+    deploy:
+      resources:
+        limits:
+          # Max 1.6GB untuk API (sisakan untuk OS ~400MB)
+          memory: 1600M
+          # PyTorch CPU-bound, jangan habiskan semua CPU
+          cpus: "1.5"
+        reservations:
+          memory: 512M
+          cpus: "0.5"
 
+  # ─── Database Service ──────────────────────────────────────────
   db:
     image: mysql:8.0
     container_name: absensi-db
-    restart: always
+    restart: unless-stopped
     environment:
-      MYSQL_ROOT_PASSWORD: ${DB_PASSWORD:-root}
+      MYSQL_ROOT_PASSWORD: ${DB_ROOT_PASSWORD}
       MYSQL_DATABASE: ${DB_NAME:-absensi}
-    ports:
-      - "3306:3306"
+      MYSQL_USER: ${DB_USER:-absensi_user}
+      MYSQL_PASSWORD: ${DB_PASSWORD}
     volumes:
-      # Map folder mysql lokal untuk persistensi data agar tidak hilang saat restart
+      # Data MySQL persistent (jangan hapus folder ini!)
       - ./mysql_data:/var/lib/mysql
+      # Konfigurasi MySQL yang dioptimasi untuk 2GB RAM
+      - ./mysql_conf/low_memory.cnf:/etc/mysql/conf.d/low_memory.cnf:ro
+    # ─── MySQL Health Check ──────────────────────────────────
+    healthcheck:
+      test: [ "CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-p${DB_ROOT_PASSWORD}" ]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    # ─── Resource Limits ──────────────────────────────────────
+    deploy:
+      resources:
+        limits:
+          # MySQL dibatasi 300MB (dikonfigurasi via low_memory.cnf)
+          memory: 350M
+          cpus: "0.5"
+        reservations:
+          memory: 128M
+  # ─── phpMyAdmin (OPSIONAL — nonaktifkan di production kalau RAM mepet) ──
+  # Uncomment hanya saat butuh manajemen database via browser
+  # Konsumsi RAM: ~80-120MB
+  #
+  # phpmyadmin:
+  #   image: phpmyadmin/phpmyadmin:latest
+  #   container_name: absensi-pma
+  #   restart: "no"  # Jangan auto-start, jalankan manual saja
+  #   environment:
+  #     PMA_HOST: db
+  #     UPLOAD_LIMIT: 64M
+  #   ports:
+  #     - "127.0.0.1:8080:80"  # Bind ke localhost saja (akses via SSH tunnel)
+  #   depends_on:
+  #     - db
+  #   deploy:
+  #     resources:
+  #       limits:
+  #         memory: 128M
 
-  phpmyadmin:
-    image: phpmyadmin/phpmyadmin
-    container_name: absensi-pma
-    restart: always
-    environment:
-      PMA_HOST: db
-      UPLOAD_LIMIT: 64M
-    ports:
-      - "8080:80"
-    depends_on:
-      - db
+  # ─── Networks ─────────────────────────────────────────────────
+networks:
+  default:
+    name: absensi-network
+    driver: bridge

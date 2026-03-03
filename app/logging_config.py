@@ -1,11 +1,12 @@
 import logging
-import sys
 from pathlib import Path
+import sys
+
 
 def setup_logging(app_name: str = "absensi_api", log_level: str = "INFO"):
     """
     Setup structured logging for the application.
-    
+
     Args:
         app_name: Name of the application for log files
         log_level: Logging level (DEBUG, INFO, WARNING, ERROR, CRITICAL)
@@ -13,14 +14,14 @@ def setup_logging(app_name: str = "absensi_api", log_level: str = "INFO"):
     # Create logs directory if it doesn't exist
     log_dir = Path("./logs")
     log_dir.mkdir(exist_ok=True)
-    
+
     # Configure root logger
     logger = logging.getLogger()
     logger.setLevel(getattr(logging, log_level.upper(), logging.INFO))
-    
+
     # Remove existing handlers
     logger.handlers.clear()
-    
+
     # Console handler - INFO and above
     console_handler = logging.StreamHandler(sys.stdout)
     console_handler.setLevel(logging.INFO)
@@ -30,7 +31,7 @@ def setup_logging(app_name: str = "absensi_api", log_level: str = "INFO"):
     )
     console_handler.setFormatter(console_formatter)
     logger.addHandler(console_handler)
-    
+
     # File handler - DEBUG and above with rotation
     from logging.handlers import RotatingFileHandler
     file_handler = RotatingFileHandler(
@@ -46,7 +47,7 @@ def setup_logging(app_name: str = "absensi_api", log_level: str = "INFO"):
     )
     file_handler.setFormatter(file_formatter)
     logger.addHandler(file_handler)
-    
+
     # Error file handler - ERROR and above
     error_handler = RotatingFileHandler(
         log_dir / f"{app_name}_error.log",
@@ -57,7 +58,7 @@ def setup_logging(app_name: str = "absensi_api", log_level: str = "INFO"):
     error_handler.setLevel(logging.ERROR)
     error_handler.setFormatter(file_formatter)
     logger.addHandler(error_handler)
-    
+
     return logger
 
 

@@ -1,14 +1,21 @@
+import os
+
 import cv2
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 import numpy as np
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
 from sqlalchemy.orm import Session
 
-from app.database import get_db
-from app.models import Person, Embedding
-from app.recog import embed_face, rebuild_cache, detect_faces_from_bgr
 from app.admin_auth import get_current_admin  # JWT dependency
+from app.database import get_db
+from app.models import Embedding, Person
+from app.recog import detect_faces_from_bgr, embed_face, rebuild_cache
 
 router = APIRouter(prefix="/admin", tags=["admin"])
+
+# ── Module-level constants ──────────────────────────────────────────
+_ALLOWED_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp"}
+_MAX_FILE_SIZE = 10 * 1024 * 1024   # 10 MB
+_ENROLL_MAX_IMAGE_PX = 1000         # resize jika dimensi image > ini
 
 
 def _vec_to_csv(v: np.ndarray) -> str:
@@ -48,17 +55,17 @@ def create_person(
 def augment_image(bgr: np.ndarray) -> list:
     """Generate augmented versions of an image for stronger embeddings"""
     augmented = [bgr]  # Original
-    
+
     # 1. Horizontal flip
     flipped = cv2.flip(bgr, 1)
     augmented.append(flipped)
-    
+
     # 2. Brightness variations (+20%, -20%)
     bright = cv2.convertScaleAbs(bgr, alpha=1.2, beta=10)
     dark = cv2.convertScaleAbs(bgr, alpha=0.8, beta=-10)
     augmented.append(bright)
     augmented.append(dark)
-    
+
     # 3. Slight rotation (+5°, -5°)
     h, w = bgr.shape[:2]
     center = (w // 2, h // 2)
@@ -66,7 +73,7 @@ def augment_image(bgr: np.ndarray) -> list:
         M = cv2.getRotationMatrix2D(center, angle, 1.0)
         rotated = cv2.warpAffine(bgr, M, (w, h), borderMode=cv2.BORDER_REPLICATE)
         augmented.append(rotated)
-    
+
     return augmented  # Returns 6 images total
 
 
@@ -84,24 +91,20 @@ async def enroll_person(
     if not files:
         raise HTTPException(status_code=400, detail="no files uploaded")
 
-    ALLOWED_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp"}
-    MAX_FILE_SIZE = 10 * 1024 * 1024
-
     added = 0
     skipped = 0
     augmented_count = 0
 
     for f in files:
         if f.filename:
-            import os
             ext = os.path.splitext(f.filename)[1].lower()
-            if ext not in ALLOWED_EXTENSIONS:
+            if ext not in _ALLOWED_EXTENSIONS:
                 skipped += 1
                 continue
 
         img_bytes = await f.read()
-        
-        if not img_bytes or len(img_bytes) > MAX_FILE_SIZE:
+
+        if not img_bytes or len(img_bytes) > _MAX_FILE_SIZE:
             skipped += 1
             continue
 
@@ -112,25 +115,25 @@ async def enroll_person(
             continue
 
         h, w = bgr.shape[:2]
-        if max(h, w) > 1000:
-            scale = 1000 / max(h, w)
+        if max(h, w) > _ENROLL_MAX_IMAGE_PX:
+            scale = _ENROLL_MAX_IMAGE_PX / max(h, w)
             bgr = cv2.resize(bgr, (int(w * scale), int(h * scale)))
 
         # FIXED: Detect face FIRST, then augment and embed the face crop
         # This matches the recognition flow for consistent embeddings
         faces = detect_faces_from_bgr(bgr, max_faces=1)
-        
+
         if not faces:
             # No face detected in this image
             skipped += 1
             continue
-        
+
         # Get the face crop (already aligned by detect_faces_from_bgr)
         face_crop = faces[0]["crop"]
-        
+
         # Generate augmented versions of the FACE CROP (not full image)
         aug_faces = augment_image(face_crop)
-        
+
         for aug_face in aug_faces:
             try:
                 emb = embed_face(aug_face)
@@ -138,7 +141,7 @@ async def enroll_person(
                 augmented_count += 1
             except Exception:
                 continue
-        
+
         added += 1
 
     db.commit()

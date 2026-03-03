@@ -34,3 +34,15 @@ Thumbs.db
 # App specific
 data/snapshots/
 init_mysql.py
+
+# Docker persistent data (jangan commit ke repo!)
+mysql_data/
+
+# Production .env (hanya ada di server, bukan di Git)
+.env.production
+
+# .env.production.example BOLEH di-commit (tidak ada secrets asli)
+# !.env.production.example  ← tidak perlu, sudah tidak masuk pola .env
+
+# CI/CD ephemeral
+test_absensi.db

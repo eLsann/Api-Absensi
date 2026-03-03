@@ -1,7 +1,10 @@
-from sqlalchemy import String, Integer, Float, DateTime, ForeignKey, Boolean, UniqueConstraint, Text
-from sqlalchemy.orm import Mapped, mapped_column, relationship
 from datetime import datetime, timezone
+
+from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint
+from sqlalchemy.orm import Mapped, mapped_column, relationship
+
 from app.database import Base
+
 
 class Person(Base):
     __tablename__ = "persons"

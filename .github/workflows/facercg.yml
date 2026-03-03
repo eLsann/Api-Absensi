@@ -279,7 +279,11 @@ jobs:
               docker login ${{ env.REGISTRY }} -u "${{ github.actor }}" --password-stdin || true
 
             # ── CAPTURE CURRENT TAG (untuk rollback) ─────────────────────
-            CURRENT_IMAGE=$(docker inspect absensi-api --format='{{.Config.Image}}' 2>/dev/null || echo "none")
+            # Gunakan if-check eksplisit untuk hindari newline di CURRENT_IMAGE
+            CURRENT_IMAGE="none"
+            if docker inspect absensi-api &>/dev/null; then
+              CURRENT_IMAGE=$(docker inspect absensi-api --format='{{.Config.Image}}' | tr -d '\n\r')
+            fi
             echo "📌 Current : $CURRENT_IMAGE"
             echo "📦 New     : $IMAGE_FULL:$IMAGE_TAG"
 
@@ -288,10 +292,17 @@ jobs:
               && sed -i "s|^IMAGE_TAG=.*|IMAGE_TAG=$IMAGE_TAG|" .env \
               || echo "IMAGE_TAG=$IMAGE_TAG" >> .env
 
-            # ── ZERO-DOWNTIME RESTART (image sudah di-pull di step sebelumnya) ─
+            # ── ENSURE DATABASE RUNNING ────────────────────────────────
+            # --no-deps DILARANG: tanpa ini, MySQL tidak jalan saat deploy pertama!
+            # docker compose up -d api akan otomatis start db terlebih dahulu
+            # (karena depends_on: db: condition: service_healthy)
+            docker compose up -d db
+            echo "💾 Database started/verified"
+
+            # ── ZERO-DOWNTIME RESTART API ───────────────────────────────
             # Hapus zombie container jika ada, lalu up
             docker ps -a --filter "name=absensi-api" -q | xargs -r docker rm -f 2>/dev/null || true
-            docker compose up -d --no-deps api
+            docker compose up -d api
             echo "🔄 Container di-restart"
 
             # ── HEALTH CHECK ──────────────────────────────────────────────

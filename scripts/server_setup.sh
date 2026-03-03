@@ -9,7 +9,7 @@
 
 set -euo pipefail
 
-DEPLOY_PATH="/opt/absensi-api"
+DEPLOY_PATH="/opt/facercg"
 DEPLOY_USER="deploy"
 REPO_NAME="api-absensi"   # Sesuaikan dengan nama repo GitHub Anda
 

@@ -9,13 +9,13 @@ Dokumen ini adalah satu-satunya panduan yang Anda butuhkan untuk menjalankan API
 1.  Pastikan Desktop/Server Anda sudah terinstall **Docker Desktop**.
 2.  Pastikan Anda memiliki folder project `Api-Absensi` ini.
 
-### Langkah-langkah
-1.  **Duplicate Env File**:
-    Copy file konfigurasi contoh agar aktif:
+### Langkah-langkah (Deploy Manual Lokal)
+1.  **Siapkan Env**:
+    Aplikasi menolak dijalankan jika password memakai nilai default pabrikan. Copy template dan isi dengan rahasia Anda:
     ```bash
-    copy .env.example .env
+    copy .env.production.example .env
     ```
-    *(Jangan khawatir, file `.env` ini aman dan tidak akan ter-upload ke GitHub)*
+    *(Wajib: Buka file `.env` dan ganti semua teks "GANTI_...")*
 
 2.  **Jalankan Docker**:
     ```bash
@@ -24,18 +24,24 @@ Dokumen ini adalah satu-satunya panduan yang Anda butuhkan untuk menjalankan API
 
 3.  **SELESAI!** 
     -   API Anda sekarang aktif di: `http://localhost:8001`
-    -   Dashboard Database: `http://localhost:8080` (Login: `root` / `root`)
+    -   Dashboard Database: `http://localhost:8080` (Login: Sesuai isi `.env`)
+
+---
+
+## Deployment Otomatis ke Server (CI/CD GitHub Actions)
+
+Bagi Anda yang mendeploy di server produksi / VPS Cloud, **Anda disarankan menggunakan pipeline CI/CD bawaan**.
+1. Siapkan SSH Keys & GitHub Secrets (lihat daftar rahasia di `.github/SECRETS_GUIDE.md`).
+2. Login ke Server via SSH dan copy `.env.production.example` menjadi `.env` di folder deployment (e.g., `/opt/facercg`), lalu lengkapi.
+3. Push Commit ke Branch 'main'. GitHub otomatis mem-build image, menghubungi server Anda, update docker-compose config, dan restart aplikasi secara aman (Zero Downtime).
 
 ---
 
 ## Apakah Saya Perlu Setting `.env`?
 
-**YA, SEKALI SAJA.**
-Karena setup ini dirancang aman untuk publik (GitHub), password database tidak lagi di-hardcode di dalam kode.
-
-Nilai default di `.env.example` sudah diset ke `root` / `root`. Jadi jika Anda hanya copy-paste file tersebut, aplikasi **PASTI LANGSUNG JALAN** tanpa error.
-
-Namun, untuk keamanan (setelah deploy), silakan ubah `SECRET_KEY` dan password database di file `.env` Anda sendiri.
+**YA, MUTLAK WAJIB.**
+Karena setup ini dirancang aman kelas produksi, aplikasi **akan error di awal (Fast-Fail) dan mati** jika Anda hanya memakai kredensial kosongan.
+Lengkapi `SECRET_KEY`, `DB_PASSWORD`, dan sebagainya di file `.env` sebelum menjalankan container docker.
 
 ---
 

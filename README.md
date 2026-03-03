@@ -39,18 +39,17 @@ Kami merekomendasikan penggunaan Docker untuk isolasi yang sempurna.
 
 ### 1. Clone Repository
 ```bash
-git clone https://github.com/username/api-absensi.git
-cd api-absensi
+git clone https://github.com/eLsann/Api-Absensi.git
+cd Api-Absensi
 ```
 
 ### 2. Konfigurasi Environment
-Duplikasi file contoh konfigurasi:
+Secara keamanan, tidak ada nilai default yang tersimpan di kode. Anda harus meng-copy file konfigurasi production dan mengisinya:
 ```bash
-cp .env.example .env
-# Windows: copy .env.example .env
+cp .env.production.example .env
+# Windows: copy .env.production.example .env
 ```
-Secara default, konfigurasi ini sudah siap jalan (Zero-Config) dengan kredensial default.
-*   **Security Note**: Untuk production, ubah `SECRET_KEY` dan password database di file `.env` ini.
+*   **Wajib Diisi**: Anda **harus** mengisi nilai `SECRET_KEY`, `DATABASE_URL`, dan variabel lain berawalan `GANTI_` di file `.env` sebelum menjalankan server. Jika tidak diisi, aplikasi akan menolak untuk start (Fail-Fast).
 
 ### 3. Jalankan Server
 Gunakan perintah Docker Compose untuk membangun dan menjalankan container:
@@ -61,7 +60,7 @@ docker-compose up -d --build
 Layanan akan tersedia di:
 *   **API Root**: `http://localhost:8001`
 *   **API Documentation (Swagger)**: `http://localhost:8001/docs`
-*   **Database Admin**: `http://localhost:8080` (User: `root`, Pass: `root`)
+*   **Database Admin**: `http://localhost:8080` (Akses sesuai kredensial DB di `.env`)
 
 ## Pengembangan Lokal (Manual)
 
